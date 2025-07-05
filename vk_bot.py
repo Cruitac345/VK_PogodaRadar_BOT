@@ -7,7 +7,6 @@ import concurrent.futures
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from background import keep_alive #импорт функции для поддержки работоспособности
 from vkbottle import Bot
 from vkbottle.bot import Message
 from vkbottle.bot import MessageEvent
@@ -2025,5 +2024,4 @@ async def guess_temp_handler(message: Message):
 # Run bot
 if __name__ == "__main__":
     print("Бот запущен...")
-    keep_alive()
     bot.run_forever()
