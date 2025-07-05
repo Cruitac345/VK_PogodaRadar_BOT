@@ -2022,6 +2022,7 @@ async def guess_temp_handler(message: Message):
 
 
 # Run bot
-if __name__ == "__main__":
-    print("Бот запущен...")
-    bot.run_forever()
+# В конце vk_bot.py добавьте:
+def start_bot():
+    """Функция для запуска бота"""
+    asyncio.run(bot.run_forever())
