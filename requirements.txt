@@ -19,9 +19,6 @@ requests==2.31.0
 # WSGI сервер для production
 gunicorn==21.2.0
 
-# WSGI сервер для production
-uvicorn==0.35.0
-
 # Дополнительные зависимости для beautifulsoup4
 lxml==5.1.0
 
