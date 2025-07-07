@@ -51,6 +51,11 @@ weather_url = 'http://api.weatherapi.com/v1'
 api_key = os.getenv('WEATHER_API_KEY')
 lang = 'ru'
 
+@bot.on.raw_event(GroupEventType.MESSAGE_NEW)  # Обрабатываем только новые сообщения
+async def message_handler(event: dict):
+    # Ваш основной код обработки сообщений
+    print("Новое сообщение:", event)
+
 # Асинхронная замена requests.get()
 async def fetch_json(url, params=None):
     async with aiohttp.ClientSession() as session:
