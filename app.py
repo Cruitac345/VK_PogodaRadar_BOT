@@ -1,20 +1,20 @@
 import asyncio
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from vk_bot import bot
+from vk_bot import bot, start_bot
 
 # Создаем lifespan manager для запуска бота
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Запускаем бота при старте приложения
-    task = asyncio.create_task(bot.run())
+    # Запускаем бота в фоновом режиме
+    task = asyncio.create_task(start_bot())  # Используем правильную функцию!
     yield
-    # Останавливаем бота при выключении
+    # Останавливаем бота при завершении
     task.cancel()
     try:
         await task
     except asyncio.CancelledError:
-        pass
+        print("Бот остановлен")
 
 app = FastAPI(lifespan=lifespan)
 
