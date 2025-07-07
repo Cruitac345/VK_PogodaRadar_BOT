@@ -691,10 +691,15 @@ async def radar_map_handler(message: Message):
     url = 'https://meteoinfo.ru/hmc-output/rmap/phenomena.gif'
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=30) as response:
+            async with session.get(url, timeout=30) as response:  # Увеличил timeout для большого файла
                 response.raise_for_status()
-                file = BytesIO(await response.read())
+                file_data = await response.read()
+                
+                # Создаем BytesIO и перематываем в начало
+                file = BytesIO(file_data)
+                file.seek(0)  # Важно!
                 file.name = "radar.gif"
+                
                 uploader = DocMessagesUploader(bot.api)
                 doc = await uploader.upload(
                     file_source=file,
