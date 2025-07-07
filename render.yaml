@@ -3,7 +3,7 @@ services:
     name: vk-bot
     env: python
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python vk_bot.py"
+    startCommand: "uvicorn vk_bot:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: VK_BOT_TOKEN
         sync: false
@@ -11,3 +11,5 @@ services:
         sync: false
       - key: ADMIN_ID
         sync: false
+      - key: PORT
+        value: 10000
