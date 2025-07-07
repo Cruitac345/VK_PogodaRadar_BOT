@@ -24,6 +24,8 @@ import typing
 import json
 import asyncio
 
+logging.getLogger("vkbottle").setLevel(logging.INFO)
+
 # Load environment variables
 load_dotenv()
 
