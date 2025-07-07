@@ -3,7 +3,6 @@ import random
 import time
 import csv
 import re
-import gc
 import concurrent.futures
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
@@ -688,168 +687,15 @@ async def aqi_handler(message: Message):
 
 
 # Radar map command (async) - оптимизированная версия
-@bot.on.message(text=["🗺️Радар", "/radarmap"])
+@bot.on.message(text=["🗺️Радар", "/radarmap", "Радар осадков"])
 async def radar_map_handler(message: Message):
-    url = 'https://meteoinfo.ru/hmc-output/rmap/phenomena.gif'
-    start_time = time.time()
-    
-    try:
-        # Сначала проверяем размер файла
-        async with aiohttp.ClientSession() as session:
-            async with session.head(url) as response:
-                content_length = int(response.headers.get('Content-Length', 0))
-                print(f"[INFO] Radar file size: {content_length / 1024 / 1024:.2f} MB")
-                
-                # Если файл слишком большой, отправляем ссылку
-                if content_length > 15 * 1024 * 1024:  # 15MB
-                    await message.answer(
-                        "⚠️ Файл радара слишком большой.\n"
-                        f"🔗 Смотрите по ссылке: {url}"
-                    )
-                    return
-        
-        # Загружаем файл по частям для экономии памяти
-        chunks = []
-        chunk_size = 512 * 1024  # 512KB chunks
-        
-        timeout = ClientTimeout(total=60, connect=10, sock_read=30)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as response:
-                response.raise_for_status()
-                
-                # Читаем по частям
-                async for chunk in response.content.iter_chunked(chunk_size):
-                    chunks.append(chunk)
-                    
-                    # Проверяем размер загруженных данных
-                    total_size = sum(len(c) for c in chunks)
-                    if total_size > 20 * 1024 * 1024:  # 20MB limit
-                        raise Exception("Файл превышает допустимый размер")
-        
-        # Собираем файл
-        file_data = b''.join(chunks)
-        original_size = len(file_data)
-        
-        # Очищаем chunks из памяти
-        del chunks
-        
-        print(f"[INFO] Downloaded {original_size / 1024 / 1024:.2f} MB in {time.time() - start_time:.2f}s")
-        
-        # Пробуем сжать GIF если он больше 5MB
-        if original_size > 5 * 1024 * 1024:
-            try:
-                from PIL import Image, ImageSequence
-                import io
-                
-                # Открываем GIF
-                img = Image.open(io.BytesIO(file_data))
-                
-                # Проверяем, что это анимированный GIF
-                if hasattr(img, 'n_frames') and img.n_frames > 1:
-                    frames = []
-                    
-                    # Обрабатываем каждый кадр
-                    for frame in ImageSequence.Iterator(img):
-                        # Уменьшаем размер если нужно
-                        width, height = frame.size
-                        if width > 800 or height > 800:
-                            # Сохраняем пропорции
-                            ratio = min(800/width, 800/height)
-                            new_size = (int(width * ratio), int(height * ratio))
-                            frame = frame.resize(new_size, Image.Resampling.LANCZOS)
-                        
-                        # Конвертируем в режим с палитрой для уменьшения размера
-                        if frame.mode != 'P':
-                            frame = frame.convert('P', palette=Image.ADAPTIVE, colors=128)
-                        
-                        frames.append(frame)
-                    
-                    # Сохраняем оптимизированный GIF
-                    output = io.BytesIO()
-                    frames[0].save(
-                        output,
-                        format='GIF',
-                        save_all=True,
-                        append_images=frames[1:],
-                        optimize=True,
-                        duration=img.info.get('duration', 100),
-                        loop=0
-                    )
-                    
-                    compressed_data = output.getvalue()
-                    compressed_size = len(compressed_data)
-                    
-                    # Используем сжатую версию если она меньше
-                    if compressed_size < original_size * 0.8:  # Минимум 20% сжатие
-                        file_data = compressed_data
-                        print(f"[INFO] Compressed to {compressed_size / 1024 / 1024:.2f} MB "
-                              f"({100 - (compressed_size/original_size*100):.1f}% reduction)")
-                    
-                    # Очищаем память
-                    del frames
-                    del img
-                    output.close()
-                    
-            except ImportError:
-                print("[WARNING] PIL not available, skipping compression")
-            except Exception as e:
-                print(f"[WARNING] Compression failed: {e}")
-        
-        # Создаем файл для загрузки
-        file = BytesIO(file_data)
-        file.seek(0)
-        file.name = "radar.gif"
-        
-        # Очищаем оригинальные данные из памяти
-        del file_data
-        
-        # Загружаем в VK
-        try:
-            uploader = DocMessagesUploader(bot.api)
-            doc = await uploader.upload(
-                file_source=file,
-                file_extension="gif",
-                peer_id=message.peer_id,
-                title="Радар осадков"
-            )
-            
-            await message.answer(
-                f"🗺️ Радар осадков\n"
-                f"⏱️ Время загрузки: {time.time() - start_time:.1f} сек",
-                attachment=doc
-            )
-            
-        finally:
-            # Закрываем и очищаем файл
-            file.close()
-            del file
-            
-    except asyncio.TimeoutError:
-        await message.answer(
-            "⏱️ Превышено время ожидания.\n"
-            f"🔗 Смотрите радар по ссылке: {url}"
-        )
-    except aiohttp.ClientError as e:
-        await message.answer(
-            f"❌ Ошибка сети: {type(e).__name__}\n"
-            f"🔗 Смотрите радар по ссылке: {url}"
-        )
-    except MemoryError:
-        await message.answer(
-            "💾 Недостаточно памяти для обработки.\n"
-            f"🔗 Смотрите радар по ссылке: {url}"
-        )
-    except Exception as e:
-        print(f"[ERROR] radar_map_handler: {e}")
-        await message.answer(
-            f"❌ Не удалось загрузить радар.\n"
-            f"🔗 Смотрите по ссылке: {url}"
-        )
-    finally:
-        # Принудительная сборка мусора для освобождения памяти
-        import gc
-        gc.collect()
-
+    unavailable_message = (
+        "⚠️ Сервис радара временно недоступен в VK-боте\n\n"
+        "Функция просмотра актуального радара осадков временно отключена из-за технических проблем на сервере.\n\n"
+        "Вы можете посмотреть текущую ситуацию с осадками в нашем телеграм-боте:\n"
+        "👉 t.me/PogodaRadar_bot"
+    )
+    await message.answer(unavailable_message)
 
 # Precipitation map command (async)
 @bot.on.message(text=["/precipitationmap"])
@@ -1347,7 +1193,6 @@ async def handle_meteo_several_cities(event: MessageEvent):
         )
 
 # Meteoweb maps command (async)
-# Глобальная переменная type_mapping (должна быть определена до использования)
 type_mapping = {
     "prec": ("prec", "🌧️ Осадки"),
     "temp": ("temp", "🌡️ Температура у поверхности 2м"),
@@ -1360,113 +1205,15 @@ type_mapping = {
     "tef": ("tef", "🌡️ Эффективная температура")
 }
 
-async def get_session():
-    return aiohttp.ClientSession(timeout=ClientTimeout(total=10))
-
-# Функция получения URL карты
-def get_fmeteo_image_and_info(run_time, forecast_hour, map_type="prec"):
-    if map_type not in type_mapping:
-        return f"Ошибка: неверный тип карты для fmeteo. Поддерживаются: {', '.join(type_mapping.keys())}", None, None
-    type_code, map_type_text = type_mapping[map_type]
-    url = f"http://fmeteo.ru/gfs/{run_time}/{type_code}_{forecast_hour}.png"
-    return url, "", map_type_text  # URL без проверки — загрузка отдельно
-
-# Обработчик команды /get_meteoweb
-@bot.on.message(text=["/get_meteoweb"])
+@bot.on.message(text=["/get_meteoweb", "Карты погоды"])
 async def meteoweb_handler(message: Message):
-    instruction = (
-        "🌍 *Команда /get_meteoweb* — ваш помощник для получения прогнозных карт погоды от Meteoweb!\n"
-        "📝 *Как использовать:*\n"
-        "Введите параметры карты в формате:\n"
-        "`время_прогона начальный_час конечный_час тип_карты`\n\n"
-        "🔍 *Примеры запросов:*\n"
-        "• `00 003 027 prec` — карта осадков с 3 по 27 час прогноза.\n"
-        "• `12 006 036 temp` — карта температуры у поверхности с 6 по 36 час.\n"
-        "• `00 003 024 temp8` — карта температуры на уровне 850 гПа с 3 по 24 час.\n\n"
-        "📊 *Доступные типы карт:*\n"
-        "• `prec` — осадки 🌧️\n"
-        "• `temp` — температура у поверхности 🌡️\n"
-        "• `temp8` — температура на уровне 850 гПа 🗻\n"
-        "• `cloudst` — общая облачность ☁️\n"
-        "• `cloudsh` — высокая облачность 🌫️\n"
-        "• `wind` — ветер 🌬️\n"
-        "• `licape` — индекс неустойчивости (LICAPE) ⚡\n"
-        "• `snd` — снежный покров ❄️\n"
-        "• `tef` — температура эффективная 🌡️\n\n"
-        "⚠️ *Важные ограничения:*\n"
-        "• За один запрос можно получить не более 10 карт.\n"
-        "• Если нужно больше карт, повторите команду."
+    unavailable_message = (
+        "⚠️ Сервис временно недоступен в VK-боте\n\n"
+        "Функция просмотра прогностических карт GFS временно отключена из-за технических проблем на сервере.\n\n"
+        "Пожалуйста, воспользуйтесь нашим телеграм-ботом для получения карт:\n"
+        "👉 t.me/PogodaRadar_bot"
     )
-    await message.answer(instruction)
-    user_id = message.from_id
-    clear_user_handlers(user_id)
-
-    async def process_meteoweb_request(msg: Message):
-        try:
-            parts = msg.text.split()
-            if len(parts) != 4:
-                raise ValueError("Неверное количество параметров. Ожидается: время прогона, начальный час, конечный час, тип карты.")
-            run_time = parts[0]
-            start_hour = int(parts[1])
-            end_hour = int(parts[2])
-            map_type = parts[3].lower()
-
-            if run_time not in ["00", "06", "12", "18"]:
-                raise ValueError("Неверное время прогона. Допустимые значения: 00, 06, 12, 18.")
-            if not (3 <= start_hour <= 384 and start_hour % 3 == 0):
-                raise ValueError("Некорректное начальное время прогноза. Время должно быть от 003 до 384 с шагом в 3 часа.")
-            if not (3 <= end_hour <= 384 and end_hour % 3 == 0):
-                raise ValueError("Некорректное конечное время прогноза. Время должно быть от 003 до 384 с шагом в 3 часа.")
-            if start_hour > end_hour:
-                raise ValueError("Начальное время не может быть больше конечного.")
-            if map_type not in type_mapping:
-                raise ValueError(f"Неверный тип карты. Допустимые значения: {', '.join(type_mapping.keys())}.")
-
-            forecast_hours = list(range(start_hour, end_hour + 1, 3))
-            max_images_per_request = 10
-            if len(forecast_hours) > max_images_per_request:
-                await msg.answer(
-                    f"⚠️ Запрос превышает лимит: можно получить только {max_images_per_request} карт за один запрос. "
-                    f"Попробуйте уменьшить диапазон времени."
-                )
-                return
-
-            urls = [
-                f"http://fmeteo.ru/gfs/{run_time}/{map_type}_{hour:03}.png"
-                for hour in forecast_hours
-            ]
-
-            attachments = []
-            session = await get_session()
-            for url in urls:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        file = BytesIO(await response.read())
-                        file.name = os.path.basename(url)
-                        uploader = DocMessagesUploader(bot.api)
-                        doc = await uploader.upload(
-                            file_source=file,
-                            file_extension="png",
-                            peer_id=msg.peer_id,
-                            title="Карта"
-                        )
-                        attachments.append(doc)
-
-            caption = (
-                f"📅 Прогноз погоды с {calculate_forecast_time(run_time, start_hour)} по {calculate_forecast_time(run_time, end_hour)}\n"
-                f"Тип карты: {type_mapping[map_type][1]}"
-            )
-
-            if attachments:
-                await msg.answer(caption, attachment=','.join(attachments))
-            else:
-                await msg.answer("Не удалось загрузить изображения.")
-
-        except Exception as e:
-            await msg.answer(f"Произошла ошибка: {str(e)}")
-
-    current_handlers[user_id] = process_meteoweb_request
-    process_meteoweb_request.once = True
+    await message.answer(unavailable_message)
 
 def calculate_forecast_time(run_time, forecast_hour):
     run_time_hour = int(run_time)
