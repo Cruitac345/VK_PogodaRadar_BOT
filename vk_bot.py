@@ -1784,7 +1784,6 @@ async def process_station(msg: Message, region_code: str):
         await msg.answer(f"Ошибка при получении данных: {str(e)}")
     finally:
         clear_user_handlers(msg.from_id)
-        del current_handlers[msg.from_id]
 
 
 # Guess temperature game
