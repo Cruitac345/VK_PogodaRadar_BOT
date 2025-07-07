@@ -3,6 +3,7 @@ import random
 import time
 import csv
 import re
+import gc
 import concurrent.futures
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
@@ -17,6 +18,7 @@ from vkbottle import TemplateElement
 from vkbottle import EMPTY_KEYBOARD
 from vkbottle.dispatch.rules.base import GeoRule
 from io import BytesIO
+from PIL import Image, ImageSequence
 import aiohttp
 from aiohttp import ClientTimeout
 import logging
@@ -685,31 +687,168 @@ async def aqi_handler(message: Message):
         await message.answer('Ошибка получения данных о качестве воздуха. Пожалуйста, попробуйте еще раз или укажите другой город.')
 
 
-# Radar map command (async)
+# Radar map command (async) - оптимизированная версия
 @bot.on.message(text=["🗺️Радар", "/radarmap"])
 async def radar_map_handler(message: Message):
     url = 'https://meteoinfo.ru/hmc-output/rmap/phenomena.gif'
+    start_time = time.time()
+    
     try:
+        # Сначала проверяем размер файла
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=30) as response:  # Увеличил timeout для большого файла
+            async with session.head(url) as response:
+                content_length = int(response.headers.get('Content-Length', 0))
+                print(f"[INFO] Radar file size: {content_length / 1024 / 1024:.2f} MB")
+                
+                # Если файл слишком большой, отправляем ссылку
+                if content_length > 15 * 1024 * 1024:  # 15MB
+                    await message.answer(
+                        "⚠️ Файл радара слишком большой.\n"
+                        f"🔗 Смотрите по ссылке: {url}"
+                    )
+                    return
+        
+        # Загружаем файл по частям для экономии памяти
+        chunks = []
+        chunk_size = 512 * 1024  # 512KB chunks
+        
+        timeout = ClientTimeout(total=60, connect=10, sock_read=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
                 response.raise_for_status()
-                file_data = await response.read()
                 
-                # Создаем BytesIO и перематываем в начало
-                file = BytesIO(file_data)
-                file.seek(0)  # Важно!
-                file.name = "radar.gif"
+                # Читаем по частям
+                async for chunk in response.content.iter_chunked(chunk_size):
+                    chunks.append(chunk)
+                    
+                    # Проверяем размер загруженных данных
+                    total_size = sum(len(c) for c in chunks)
+                    if total_size > 20 * 1024 * 1024:  # 20MB limit
+                        raise Exception("Файл превышает допустимый размер")
+        
+        # Собираем файл
+        file_data = b''.join(chunks)
+        original_size = len(file_data)
+        
+        # Очищаем chunks из памяти
+        del chunks
+        
+        print(f"[INFO] Downloaded {original_size / 1024 / 1024:.2f} MB in {time.time() - start_time:.2f}s")
+        
+        # Пробуем сжать GIF если он больше 5MB
+        if original_size > 5 * 1024 * 1024:
+            try:
+                from PIL import Image, ImageSequence
+                import io
                 
-                uploader = DocMessagesUploader(bot.api)
-                doc = await uploader.upload(
-                    file_source=file,
-                    file_extension="gif",
-                    peer_id=message.peer_id,
-                    title="Радар осадков"
-                )
-                await message.answer("Радар осадков:", attachment=doc)
+                # Открываем GIF
+                img = Image.open(io.BytesIO(file_data))
+                
+                # Проверяем, что это анимированный GIF
+                if hasattr(img, 'n_frames') and img.n_frames > 1:
+                    frames = []
+                    
+                    # Обрабатываем каждый кадр
+                    for frame in ImageSequence.Iterator(img):
+                        # Уменьшаем размер если нужно
+                        width, height = frame.size
+                        if width > 800 or height > 800:
+                            # Сохраняем пропорции
+                            ratio = min(800/width, 800/height)
+                            new_size = (int(width * ratio), int(height * ratio))
+                            frame = frame.resize(new_size, Image.Resampling.LANCZOS)
+                        
+                        # Конвертируем в режим с палитрой для уменьшения размера
+                        if frame.mode != 'P':
+                            frame = frame.convert('P', palette=Image.ADAPTIVE, colors=128)
+                        
+                        frames.append(frame)
+                    
+                    # Сохраняем оптимизированный GIF
+                    output = io.BytesIO()
+                    frames[0].save(
+                        output,
+                        format='GIF',
+                        save_all=True,
+                        append_images=frames[1:],
+                        optimize=True,
+                        duration=img.info.get('duration', 100),
+                        loop=0
+                    )
+                    
+                    compressed_data = output.getvalue()
+                    compressed_size = len(compressed_data)
+                    
+                    # Используем сжатую версию если она меньше
+                    if compressed_size < original_size * 0.8:  # Минимум 20% сжатие
+                        file_data = compressed_data
+                        print(f"[INFO] Compressed to {compressed_size / 1024 / 1024:.2f} MB "
+                              f"({100 - (compressed_size/original_size*100):.1f}% reduction)")
+                    
+                    # Очищаем память
+                    del frames
+                    del img
+                    output.close()
+                    
+            except ImportError:
+                print("[WARNING] PIL not available, skipping compression")
+            except Exception as e:
+                print(f"[WARNING] Compression failed: {e}")
+        
+        # Создаем файл для загрузки
+        file = BytesIO(file_data)
+        file.seek(0)
+        file.name = "radar.gif"
+        
+        # Очищаем оригинальные данные из памяти
+        del file_data
+        
+        # Загружаем в VK
+        try:
+            uploader = DocMessagesUploader(bot.api)
+            doc = await uploader.upload(
+                file_source=file,
+                file_extension="gif",
+                peer_id=message.peer_id,
+                title="Радар осадков"
+            )
+            
+            await message.answer(
+                f"🗺️ Радар осадков\n"
+                f"⏱️ Время загрузки: {time.time() - start_time:.1f} сек",
+                attachment=doc
+            )
+            
+        finally:
+            # Закрываем и очищаем файл
+            file.close()
+            del file
+            
+    except asyncio.TimeoutError:
+        await message.answer(
+            "⏱️ Превышено время ожидания.\n"
+            f"🔗 Смотрите радар по ссылке: {url}"
+        )
+    except aiohttp.ClientError as e:
+        await message.answer(
+            f"❌ Ошибка сети: {type(e).__name__}\n"
+            f"🔗 Смотрите радар по ссылке: {url}"
+        )
+    except MemoryError:
+        await message.answer(
+            "💾 Недостаточно памяти для обработки.\n"
+            f"🔗 Смотрите радар по ссылке: {url}"
+        )
     except Exception as e:
-        await message.answer(f'Не удалось загрузить изображение: {str(e)}')
+        print(f"[ERROR] radar_map_handler: {e}")
+        await message.answer(
+            f"❌ Не удалось загрузить радар.\n"
+            f"🔗 Смотрите по ссылке: {url}"
+        )
+    finally:
+        # Принудительная сборка мусора для освобождения памяти
+        import gc
+        gc.collect()
 
 
 # Precipitation map command (async)
