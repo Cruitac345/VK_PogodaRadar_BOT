@@ -2030,5 +2030,9 @@ async def guess_temp_handler(message: Message):
 
 # Run bot
 async def start_bot():
-    print("Бот запускается...")
-    await bot.run_forever()
+    while True:
+        try:
+            await bot.run_forever()
+        except Exception as e:
+            print(f"Ошибка: {e}. Переподключаемся...")
+            await asyncio.sleep(5)
