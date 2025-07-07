@@ -1,32 +1,27 @@
-import threading
 import asyncio
-from flask import Flask
-from vk_bot import start_bot  # импортируйте функцию запуска бота
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from vk_bot import bot
 
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "VK Bot is running!"
-
-@app.route('/health')
-def health():
-    return "OK", 200
-
-def run_bot():
-    """Запуск VK бота в отдельном потоке с созданием нового event loop"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+# Создаем lifespan manager для запуска бота
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Запускаем бота при старте приложения
+    task = asyncio.create_task(bot.run())
+    yield
+    # Останавливаем бота при выключении
+    task.cancel()
     try:
-        loop.run_until_complete(start_bot())  # предполагается, что start_bot() - асинхронная функция
-    except Exception as e:
-        print(f"Ошибка в боте: {e}")
-    finally:
-        loop.close()
+        await task
+    except asyncio.CancelledError:
+        pass
 
-# Запускаем бота в фоновом потоке
-bot_thread = threading.Thread(target=run_bot, daemon=True)
-bot_thread.start()
+app = FastAPI(lifespan=lifespan)
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)  # Для Render используйте порт 10000
+@app.get("/")
+async def home():
+    return {"status": "VK Bot is running!"}
+
+@app.get("/health")
+async def health():
+    return {"status": "OK"}
